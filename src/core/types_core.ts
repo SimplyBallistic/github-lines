@@ -1,6 +1,7 @@
 export class LineData {
   readonly lineLength: number;
 
+  // file extension
   readonly extension: string;
 
   readonly toDisplay: string;

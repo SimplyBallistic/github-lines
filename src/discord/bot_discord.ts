@@ -11,6 +11,9 @@ import * as path from "path";
 import { DiscordConfig } from "./types_discord";
 import { Core } from "../core/core";
 
+const UP_ARROW = "⬆";
+const DOWN_ARROW = "⬇";
+
 export class GHLDiscordBot extends DiscordCommandBot.Client {
   readonly core: Core;
 
@@ -53,7 +56,24 @@ export class GHLDiscordBot extends DiscordCommandBot.Client {
 
       const botMsg = await this.handleMessage(msg);
       if (botMsg) {
-        msg.channel.send(botMsg);
+        const sentMessage = await msg.channel.send(botMsg);
+        if (sentMessage.editable) await Promise.all([sentMessage.react(UP_ARROW), sentMessage.react(DOWN_ARROW)]);
+
+        sentMessage
+          .awaitReactions((react) => [UP_ARROW, DOWN_ARROW].includes(react), { max: 1, time: 60000, errors: ["time"] })
+          .then((collected) => {
+            const reaction = collected.first();
+
+            if (reaction?.emoji.name === UP_ARROW) {
+              sentMessage.reply("you reacted with a thumbs up.");
+            } else {
+              sentMessage.reply("you reacted with a thumbs down.");
+            }
+            return reaction;
+          })
+          .catch((collected) => {
+            sentMessage.reply("you reacted with neither a thumbs up, nor a thumbs down.");
+          });
       }
     });
 
