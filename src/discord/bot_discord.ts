@@ -8,6 +8,7 @@ import * as DiscordBot from "discord.js";
 import * as Prismalytics from "prismajs";
 import * as Dbl from "dblapi.js";
 import * as path from "path";
+import { MessageReaction } from "discord.js";
 import { DiscordConfig } from "./types_discord";
 import { Core } from "../core/core";
 
