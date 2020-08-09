@@ -3,6 +3,13 @@ import { isFilled } from "ts-is-present"; // https://github.com/microsoft/TypeSc
 
 import { LineData, IMessageData } from "./types_core";
 
+const supportedSourcesRegex = {
+  GitHub: /https?:\/\/github\.com\/([a-zA-Z0-9-_]+\/[A-Za-z0-9_.-]+)\/blob\/(.+?)\/(.+?)#L(\d+)[-~]?L?(\d*)/g,
+  Gist: /https?:\/\/gist\.github\.com\/([a-zA-Z0-9-_]+\/[0-9a-zA-Z]+)\/?([0-9a-z]*)\/*#file-(.+?)-L(\d+)[-~]?L?(\d*)/g,
+  GitLab: /https?:\/\/gitlab\.com\/([a-zA-Z0-9-_]+\/[A-Za-z0-9_.-]+)\/-\/blob\/(.+?)\/(.+?)#L(\d+)-?(\d*)/g
+};
+type SupportedSources = keyof typeof supportedSourcesRegex;
+
 export class Core {
   readonly GITHUB_TOKEN: string | undefined;
 
@@ -42,40 +49,69 @@ export class Core {
     return newLines.join("\n");
   }
 
+  async handleMessage(msg: string): Promise<IMessageData> {
+    const returned: Array<Promise<LineData | null>> = [];
+
+    Object.entries(supportedSourcesRegex).forEach(([type, regex]) => {
+      const matches = msg.matchAll(regex);
+      if (matches) {
+        for (const match of matches) {
+          // https://github.com/microsoft/TypeScript/issues/38520 casting needed until TS types Object utility methods better
+          returned.push(this.handleMatch(match, type as SupportedSources));
+        }
+      }
+    });
+
+    const filtered = (await Promise.all(returned)).filter(isFilled);
+
+    let totalLines = 0;
+    filtered.forEach((el) => {
+      totalLines += el.lineLength;
+    });
+    return {
+      msgList: filtered,
+      totalLines
+    };
+  }
+
   /**
    * Handles a match for lines
    * @param {Array} match The match list (as returned by a regex)
+   * In the context of GitHub Gists, repoName is <username>/<gist-id> & branchName is the revision ID
    * @param {String} type The webiste the match was detected in
    * @returns {?Array} an array with the message to return and the number of lines (null if failed)
    */
-  async handleMatch(match: Array<string>, type: string): Promise<LineData | null> {
+  async handleMatch(
+    [fullLink, repoName, branchName, filePath, lineStart, lineEnd]: Array<string>,
+    type: SupportedSources
+  ): Promise<LineData | null> {
     let lines;
-    let filename = match[3];
+    let fileName = filePath;
     if (type === "GitHub") {
-      const resp = await fetch(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${filename}`);
+      const resp = await fetch(`https://raw.githubusercontent.com/${repoName}/${branchName}/${fileName}`);
       if (!resp.ok) {
         return null; // TODO: fallback to API
       }
       const text = await resp.text();
       lines = text.split("\n");
     } else if (type === "GitLab") {
-      const resp = await fetch(`https://gitlab.com/${match[1]}/-/raw/${match[2]}/${filename}`);
+      const resp = await fetch(`https://gitlab.com/${repoName}/-/raw/${branchName}/${fileName}`);
       if (!resp.ok) {
         return null; // TODO: fallback to API
       }
       const text = await resp.text();
       lines = text.split("\n");
     } else if (type === "Gist") {
-      filename = filename.replace(/-([^-]*)$/, ".$1");
+      fileName = fileName.replace(/-([^-]*)$/, ".$1");
       let text;
-      if (match[2].length) {
-        const resp = await fetch(`https://gist.githubusercontent.com/${match[1]}/raw/${match[2]}/${filename}`);
+      if (branchName.length) {
+        const resp = await fetch(`https://gist.githubusercontent.com/${repoName}/raw/${branchName}/${fileName}`);
         if (!resp.ok) {
           return null; // TODO: fallback to API
         }
         text = await resp.text();
       } else {
-        const resp = await fetch(`https://api.github.com/gists/${match[1].split("/")[1]}`, {
+        const resp = await fetch(`https://api.github.com/gists/${repoName.split("/")[1]}`, {
           method: "GET",
           headers: this.authHeaders
         });
@@ -83,7 +119,7 @@ export class Core {
           return null;
         }
         const json = await resp.json();
-        text = json.files[filename]?.content;
+        text = json.files[fileName]?.content;
         if (!text) {
           // if the gist exists but not the file
           return null;
@@ -97,68 +133,32 @@ export class Core {
 
     let toDisplay;
     let lineLength;
-    if (!match[5].length || match[4] === match[5]) {
-      if (parseInt(match[4], 10) > lines.length || parseInt(match[4], 10) === 0) return null;
-      toDisplay = lines[parseInt(match[4], 10) - 1].trim().replace(/``/g, "`\u200b`"); // escape backticks
+    // if lineEnd doesn't exist
+    if (!lineEnd.length || lineStart === lineEnd) {
+      if (parseInt(lineStart, 10) > lines.length || parseInt(lineStart, 10) === 0) return null;
+      toDisplay = lines[parseInt(lineStart, 10) - 1].trim().replace(/``/g, "`\u200b`"); // escape backticks
       lineLength = 1;
     } else {
-      let start = parseInt(match[4], 10);
-      let end = parseInt(match[5], 10);
+      let start = parseInt(lineStart, 10);
+      let end = parseInt(lineEnd, 10);
       if (end < start) [start, end] = [end, start];
       if (end > lines.length) end = lines.length;
       if (start === 0) start = 1;
       lineLength = end - start + 1;
       toDisplay = Core.formatIndent(lines.slice(start - 1, end).join("\n")).replace(/``/g, "`\u200b`"); // escape backticks
     }
+    // add additional info for users & reaction code
+    toDisplay = Core.formatIndent(
+      [`Fetched From ${type}`, `${repoName} - ${branchName}`, `${filePath} L${lineStart}-${lineEnd || lineStart}`].map(
+        (info) => `//${info}\n`
+      ) + toDisplay
+    );
 
     // file extension for syntax highlighting
-    let extension = (filename.includes(".") ? filename.split(".") : [""]).pop(); // .pop returns the last element
+    let extension = (fileName.includes(".") ? fileName.split(".") : [""]).pop(); // .pop returns the last element
     if (!extension || extension.match(/[^0-9a-z]/i)) extension = ""; // alphanumeric extensions only
 
     // const message = `\`\`\`${toDisplay.search(/\S/) !== -1 ? extension : " "}\n${toDisplay}\n\`\`\``;
     return new LineData(lineLength, extension, toDisplay);
-  }
-
-  async handleMessage(msg: string): Promise<IMessageData> {
-    const returned: Array<Promise<LineData | null>> = [];
-
-    const githubMatch = msg.matchAll(
-      /https?:\/\/github\.com\/([a-zA-Z0-9-_]+\/[A-Za-z0-9_.-]+)\/blob\/(.+?)\/(.+?)#L(\d+)[-~]?L?(\d*)/g
-    );
-    if (githubMatch) {
-      for (const match of githubMatch) {
-        returned.push(this.handleMatch(match, "GitHub"));
-      }
-    }
-
-    const gitlabMatch = msg.matchAll(
-      /https?:\/\/gitlab\.com\/([a-zA-Z0-9-_]+\/[A-Za-z0-9_.-]+)\/-\/blob\/(.+?)\/(.+?)#L(\d+)-?(\d*)/g
-    );
-    if (gitlabMatch) {
-      for (const match of gitlabMatch) {
-        returned.push(this.handleMatch(match, "GitLab"));
-      }
-    }
-
-    const gistMatch = msg.matchAll(
-      /https?:\/\/gist\.github\.com\/([a-zA-Z0-9-_]+\/[0-9a-zA-Z]+)\/?([0-9a-z]*)\/*#file-(.+?)-L(\d+)[-~]?L?(\d*)/g
-    );
-    if (gistMatch) {
-      for (const match of gistMatch) {
-        returned.push(this.handleMatch(match, "Gist"));
-      }
-    }
-
-    const unfiltered = await Promise.all(returned);
-    const filtered = unfiltered.filter(isFilled);
-
-    let totalLines = 0;
-    filtered.forEach((el) => {
-      totalLines += el.lineLength;
-    });
-    return {
-      msgList: filtered,
-      totalLines
-    };
   }
 }

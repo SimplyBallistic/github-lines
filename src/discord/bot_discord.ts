@@ -48,6 +48,7 @@ export class GHLDiscordBot extends DiscordCommandBot.Client {
    * Starts listening to new messages.
    */
   start(): void {
+    this.on("messageReactionAdd", (react) => {});
     // Handles all messages and checks whether they contain a resolvable link
     this.on("message", async (msg) => {
       if (msg.author.bot) {
@@ -56,24 +57,8 @@ export class GHLDiscordBot extends DiscordCommandBot.Client {
 
       const botMsg = await this.handleMessage(msg);
       if (botMsg) {
-        const sentMessage = await msg.channel.send(botMsg);
+        const sentMessage = await msg.reply(botMsg);
         if (sentMessage.editable) await Promise.all([sentMessage.react(UP_ARROW), sentMessage.react(DOWN_ARROW)]);
-
-        sentMessage
-          .awaitReactions((react) => [UP_ARROW, DOWN_ARROW].includes(react), { max: 1, time: 60000, errors: ["time"] })
-          .then((collected) => {
-            const reaction = collected.first();
-
-            if (reaction?.emoji.name === UP_ARROW) {
-              sentMessage.reply("you reacted with a thumbs up.");
-            } else {
-              sentMessage.reply("you reacted with a thumbs down.");
-            }
-            return reaction;
-          })
-          .catch((collected) => {
-            sentMessage.reply("you reacted with neither a thumbs up, nor a thumbs down.");
-          });
       }
     });
 
