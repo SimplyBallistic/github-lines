@@ -16,11 +16,16 @@
     "discord.js",
     "github"
   ],
+  "nodemonConfig": {
+    "exec": "npm run dev",
+    "ext": "js,ts"
+  },
   "scripts": {
     "start": "node build/app.js --discord",
-    "dev": "ts-node src/app.ts --discord",
-    "build": "tsc",
     "start-discord": "node build/app.js --discord",
+    "dev": "node --inspect -r ts-node/register src/app.ts --discord",
+    "dev:watch":"nodemon",
+    "build": "tsc",
     "test": "mocha -r ts-node/register tests/**/*.test.ts",
     "lint": "eslint src --ext js,ts",
     "lint-fix": "eslint src --ext js,ts --fix"
@@ -49,6 +54,7 @@
     "eslint-plugin-prettier": "^3.1.3",
     "eslint-plugin-promise": "^4.2.1",
     "mocha": "^7.1.2",
+    "nodemon": "^2.0.4",
     "prettier": "^2.0.5",
     "ts-node": "^8.9.0",
     "typescript": "^3.9.6"
